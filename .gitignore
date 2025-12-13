@@ -41,6 +41,11 @@ env/
 .env.*.local
 .env.production
 
+# Frontend env
+frontend/.env.local
+frontend/.env.*.local
+frontend/node_modules/*
+
 # Uploads (IMPORTANTE - ignorar arquivos grandes)
 uploads/*
 !uploads/.gitkeep

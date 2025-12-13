@@ -108,7 +108,7 @@ MAX_TOKEN_CHUNK_SIZE=10000
 
 ## 💻 Desenvolvimento Local
 
-### Instalação
+### Instalação Backend
 
 ```bash
 # Criar ambiente virtual
@@ -120,6 +120,22 @@ venv\Scripts\activate     # Windows
 
 # Instalar dependências
 pip install -r requirements.txt
+```
+
+### Instalação Frontend
+
+```bash
+# Entrar na pasta frontend
+cd frontend
+
+# Instalar dependências (com pnpm)
+pnpm install
+
+# Ou com npm
+npm install
+
+# Ou com yarn
+yarn install
 ```
 
 ### Iniciar Serviços
@@ -137,6 +153,13 @@ python -m celery -A celery_worker worker --loglevel=info --pool=solo
 **Terminal 3 - API:**
 ```bash
 python graph_api_v3.py
+```
+
+**Terminal 4 - Frontend (Next.js):**
+```bash
+cd frontend
+pnpm dev
+# Acesse: http://localhost:3000
 ```
 
 ## 📖 Documentação
@@ -172,7 +195,50 @@ graphrag-api/
 ├── docker-compose.yml      # Orquestração
 ├── requirements.txt        # Dependências Python
 ├── .env.example           # Template de env
-└── uploads/               # Arquivos (volume)
+├── uploads/               # Arquivos (volume)
+└── frontend/              # Dashboard (Next.js)
+    ├── app/               # Páginas
+    ├── components/        # Componentes React
+    ├── package.json       # Dependências Node
+    └── next.config.mjs    # Config Next.js
+```
+
+## 🌐 Frontend (Dashboard)
+
+O projeto inclui um dashboard Next.js para gerenciar documentos e consultas.
+
+**Funcionalidades:**
+- Upload de documentos
+- Monitoramento de processamento
+- Consultas aos documentos
+- Visualização de resultados
+
+**Iniciar em desenvolvimento:**
+```bash
+cd frontend
+pnpm dev
+```
+
+**Build para produção:**
+```bash
+cd frontend
+pnpm build
+pnpm start
+```
+
+**Configurar variáveis de ambiente:**
+```bash
+cd frontend
+cp .env.example .env.local
+```
+
+**Editar `frontend/.env.local`:**
+```env
+# URL da API (desenvolvimento)
+NEXT_PUBLIC_API_URL=http://localhost:8000
+
+# Para produção:
+# NEXT_PUBLIC_API_URL=https://api.seudominio.com
 ```
 
 ## 🚀 Atualizar em Produção
@@ -184,7 +250,8 @@ graphrag-api/
    git commit -m "Sua mensagem"
    git push origin main
    ```
-3. No EasyPanel, clique em **Reimplantar**
+3. No EasyPanel, clique em **Reimplantar** (API e Worker)
+4. Para o frontend, crie um App separado com `frontend/` como raiz
 
 ## 🐛 Troubleshooting
 
