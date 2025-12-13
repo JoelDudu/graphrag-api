@@ -1,0 +1,31 @@
+fastapi
+uvicorn
+python-dotenv
+llama-index
+llama-index-llms-openai
+llama-index-embeddings-openai
+llama-index-readers-file
+python-multipart
+unstructured
+openpyxl
+python-docx
+python-pptx
+pypdf
+python-jose[cryptography]
+
+neo4j
+llama-index-llms-anthropic
+
+# LangChain (para LLMGraphTransformer - igual ao llm-graph-builder)
+langchain
+langchain-anthropic
+langchain-openai
+langchain-community
+langchain-experimental
+langchain-text-splitters
+pymupdf
+tiktoken
+
+# Async Processing (Celery + Redis)
+celery[redis]
+redis
