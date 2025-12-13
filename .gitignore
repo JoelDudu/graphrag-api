@@ -34,10 +34,11 @@ env/
 *~
 .DS_Store
 
-# Environment
+# Environment (NUNCA commitar .env com secrets!)
 .env
 .env.local
 .env.*.local
+.env.production
 
 # Uploads (IMPORTANTE - ignorar arquivos grandes)
 uploads/*
