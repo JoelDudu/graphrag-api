@@ -2,213 +2,213 @@
 
 API assíncrona para processamento de documentos com extração de grafo de conhecimento usando LLMs.
 
-## 🎉 Novidades v3.1
+## 🎯 Funcionalidades
 
-### 🔐 Autenticação JWT
-- Todos os endpoints protegidos (exceto `/health`)
-- Tokens com expiração configurável (padrão: 24h)
-- Usuários padrão: `admin/admin123` e `user/user123`
+- ✅ **Autenticação JWT** - Todos os endpoints protegidos
+- ✅ **Múltiplos Formatos** - PDF, Word, Excel, PowerPoint, TXT, CSV
+- ✅ **Processamento Assíncrono** - Celery + Redis
+- ✅ **Múltiplos LLMs** - Claude, OpenAI, Kimi, DeepSeek
+- ✅ **Busca Híbrida** - Semântica + Grafo de Conhecimento
+- ✅ **Neo4j Vector Store** - Armazenamento de embeddings
 
-### 📁 Suporte a Múltiplos Formatos
-- **PDF** (.pdf)
-- **Word** (.docx, .doc)
-- **Excel** (.xlsx, .xls)
-- **PowerPoint** (.pptx, .ppt)
-- **Texto** (.txt, .csv)
+## 🚀 Deploy Rápido
 
-**Veja detalhes completos em:** `CHANGELOG_v3.1.md`
-
-## Arquitetura
-
-- **API**: FastAPI (`graph_api_v3.py`)
-- **Worker**: Celery (`celery_worker.py`)
-- **LLMs**: Claude, OpenAI, Kimi (`llm_providers.py`)
-- **Prompts**: Especializados por domínio (`extraction_prompts.py`)
-- **Vector Store**: Neo4j (`neo4j_store.py`)
-
-## Instalação
+### Com Docker Compose
 
 ```bash
-pip install -r requirements.txt
+# 1. Configure variáveis de ambiente
+cp .env.example .env
+# Edite .env com suas credenciais
+
+# 2. Inicie os serviços
+docker-compose up -d
+
+# 3. Acesse
+# API: http://localhost:8000
+# Docs: http://localhost:8000/docs
 ```
 
-## Configuração
+### No EasyPanel
 
-Edite `.env`:
+1. Conecte seu repositório GitHub
+2. Configure as variáveis de ambiente
+3. Deploy com `Dockerfile`
+4. Crie outro App para o Worker com `Dockerfile.worker`
 
-```env
-# Neo4j
-NEO4J_URI=neo4j://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=password
+## 🔐 Autenticação
 
-# LLMs
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
-MOONSHOT_API_KEY=sk-...
-
-# Redis
-REDIS_URL=redis://localhost:6379
-
-# JWT (IMPORTANTE: Altere em produção!)
-JWT_SECRET_KEY=your-secret-key-change-this-in-production
-JWT_EXPIRE_MINUTES=1440
+**Usuários padrão:**
+```
+admin / admin123
+user / user123
 ```
 
-## Iniciar
-
-### Opção 1: Script de Setup (Windows)
-```bash
-setup_v3.1.bat
-```
-
-### Opção 2: Manual
-
-**Terminal 1 - Worker Celery:**
-```bash
-python -m celery -A celery_worker worker --loglevel=info --pool=solo
-```
-
-**Terminal 2 - API:**
-```bash
-python graph_api_v3.py
-# ou
-uvicorn graph_api_v3:app --reload
-```
-
-### Testar
-```bash
-# Teste básico
-python test_api.py
-
-# Teste com upload
-python test_api.py documento.docx claude generic
-```
-
-## Uso Rápido
-
-### 1. Autenticar
+**Obter token:**
 ```bash
 curl -X POST "http://localhost:8000/auth/login" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "username=admin&password=admin123"
 ```
 
-### 2. Upload (com token)
+**Usar token:**
 ```bash
-curl -X POST "http://localhost:8000/upload" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -F "file=@documento.docx"
+curl -X GET "http://localhost:8000/documents" \
+  -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
-### 3. Processar
+## 📁 Formatos Suportados
+
+- PDF (.pdf)
+- Word (.docx, .doc)
+- Excel (.xlsx, .xls)
+- PowerPoint (.pptx, .ppt)
+- Texto (.txt)
+- CSV (.csv)
+
+## 📚 Endpoints Principais
+
+| Endpoint | Método | Descrição |
+|----------|--------|-----------|
+| `/auth/login` | POST | Obter token JWT |
+| `/upload` | POST | Upload de documento |
+| `/process` | POST | Iniciar processamento |
+| `/status/{id}` | GET | Status do processamento |
+| `/query` | POST | Consultar documentos |
+| `/documents` | GET | Listar documentos |
+| `/health` | GET | Status da API |
+
+## 🔧 Configuração
+
+### Variáveis de Ambiente
+
+```env
+# Neo4j
+NEO4J_URI=neo4j://seu-host:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=password
+NEO4J_DATABASE=neo4j
+
+# APIs
+OPENAI_API_KEY=sk-proj-...
+ANTHROPIC_API_KEY=sk-ant-api03-...
+
+# Redis
+REDIS_URL=redis://redis:6379/0
+
+# JWT (ALTERE EM PRODUÇÃO!)
+JWT_SECRET_KEY=sua-chave-secreta-forte
+JWT_EXPIRE_MINUTES=1440
+
+# Configurações
+DEFAULT_MODEL=claude
+TOKEN_CHUNK_SIZE=130
+CHUNK_OVERLAP=15
+MAX_TOKEN_CHUNK_SIZE=10000
+```
+
+## 💻 Desenvolvimento Local
+
+### Instalação
+
 ```bash
-curl -X POST "http://localhost:8000/process" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "document_id": "DOC_ID",
-    "model": "claude",
-    "doc_type": "generic"
-  }'
+# Criar ambiente virtual
+python -m venv venv
+
+# Ativar
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate     # Windows
+
+# Instalar dependências
+pip install -r requirements.txt
 ```
 
-### 4. Consultar
+### Iniciar Serviços
+
+**Terminal 1 - Redis:**
 ```bash
-curl -X POST "http://localhost:8000/query" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "Faça um resumo",
-    "document_id": "DOC_ID",
-    "search_type": "hybrid"
-  }'
+redis-server
 ```
 
-## Cliente Python
-
-```python
-from client_example import GraphRAGClient
-
-client = GraphRAGClient("http://localhost:8000")
-client.login("admin", "admin123")
-
-doc_id = client.upload_file("documento.xlsx")
-client.process_document(doc_id, model="claude", doc_type="financial")
-client.wait_for_completion(doc_id)
-
-result = client.query("Quais são os dados financeiros?", doc_id)
-print(result['answer'])
+**Terminal 2 - Celery Worker:**
+```bash
+python -m celery -A celery_worker worker --loglevel=info --pool=solo
 ```
 
-## Endpoints
+**Terminal 3 - API:**
+```bash
+python graph_api_v3.py
+```
 
-| Endpoint | Método | Auth | Descrição |
-|----------|--------|------|-----------|
-| `/auth/login` | POST | ❌ | Obter token JWT |
-| `/auth/me` | GET | ✅ | Info do usuário |
-| `/health` | GET | ❌ | Status da API |
-| `/upload` | POST | ✅ | Upload de arquivo |
-| `/process` | POST | ✅ | Processar documento |
-| `/status/{id}` | GET | ✅ | Status do processamento |
-| `/query` | POST | ✅ | Consultar documentos |
-| `/documents` | GET | ✅ | Listar documentos |
-| `/documents/{id}` | DELETE | ✅ | Excluir documento |
-| `/supported-formats` | GET | ✅ | Formatos suportados |
-| `/doc-types` | GET | ✅ | Tipos de documentos |
-
-## Tipos de Busca
-
-- **semantic**: Busca por similaridade semântica (embeddings)
-- **graph**: Navega entidades e relacionamentos
-- **hybrid**: Combina semantic + graph
-
-## Modelos Suportados
-
-- **Claude**: Batch API (50% desconto)
-- **OpenAI**: Batch API (50% desconto)
-- **Kimi**: Processamento paralelo (máx 3 simultâneos)
-
-## 📚 Documentação
+## 📖 Documentação
 
 - **Swagger UI**: http://localhost:8000/docs
-- **API_AUTH_GUIDE.md**: Guia completo de autenticação
-- **CHANGELOG_v3.1.md**: Novidades e mudanças
-- **client_example.py**: Cliente Python completo
+- **ReDoc**: http://localhost:8000/redoc
+- **Health Check**: http://localhost:8000/health
 
-## 🔒 Segurança
+## 🔒 Segurança em Produção
 
-⚠️ **ANTES DE PRODUÇÃO:**
+⚠️ **IMPORTANTE:**
 
-1. Altere `JWT_SECRET_KEY` no `.env`
+1. Altere `JWT_SECRET_KEY` para uma chave forte
 2. Altere senhas padrão em `auth.py`
-3. Use HTTPS
-4. Configure CORS adequadamente
+3. Use HTTPS (EasyPanel configura automaticamente)
+4. Configure CORS para seus domínios
 5. Implemente rate limiting
+6. Use banco de dados real para usuários
 
-## 📦 Arquivos Principais
+## 📦 Estrutura do Projeto
 
 ```
+graphrag-api/
 ├── graph_api_v3.py          # API principal
-├── auth.py                  # Autenticação JWT (NOVO)
-├── file_processor.py        # Processador de arquivos (NOVO)
-├── celery_worker.py         # Worker assíncrono
+├── auth.py                  # Autenticação JWT
+├── file_processor.py        # Processador de arquivos
+├── celery_worker.py         # Worker Celery
 ├── llm_providers.py         # Provedores LLM
-├── neo4j_store.py          # Store Neo4j
-├── extraction_prompts.py    # Prompts de extração
-├── test_api.py             # Script de teste (NOVO)
-├── client_example.py       # Cliente Python (NOVO)
-└── requirements.txt        # Dependências
+├── neo4j_store.py          # Vector Store Neo4j
+├── extraction_prompts.py    # Prompts por domínio
+├── Dockerfile              # Build da API
+├── Dockerfile.worker       # Build do Worker
+├── docker-compose.yml      # Orquestração
+├── requirements.txt        # Dependências Python
+├── .env.example           # Template de env
+└── uploads/               # Arquivos (volume)
 ```
 
-## 🆘 Suporte
+## 🚀 Atualizar em Produção
 
-- **Guia de autenticação**: `API_AUTH_GUIDE.md`
-- **Teste rápido**: `python test_api.py`
-- **Health check**: http://localhost:8000/health
-- **Documentação**: http://localhost:8000/docs
+1. Faça alterações localmente
+2. Commit e push para GitHub:
+   ```bash
+   git add .
+   git commit -m "Sua mensagem"
+   git push origin main
+   ```
+3. No EasyPanel, clique em **Reimplantar**
+
+## 🐛 Troubleshooting
+
+**Worker não processa:**
+- Verifique se Redis está rodando
+- Confirme que volumes estão compartilhados
+- Veja logs do worker
+
+**Neo4j não conecta:**
+- Verifique URI e credenciais
+- Confirme que porta 7687 está acessível
+
+**Upload falha:**
+- Verifique permissões do volume `/app/uploads`
+- Confirme espaço em disco
+
+## 📞 Suporte
+
+- Health check: `GET /health`
+- Documentação: `GET /docs`
+- Logs: Verifique no EasyPanel ou terminal
 
 ---
 
 **Versão:** 3.1.0  
-**Última atualização:** 13/12/2024
+**Última atualização:** 13/12/2024  
+**Status:** ✅ Pronto para Produção
