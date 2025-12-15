@@ -6,13 +6,19 @@ export async function POST(request: NextRequest) {
     const { username, password } = body
 
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
-
-    const params = new URLSearchParams()
-    params.append("username", username)
-    params.append("password", password)
+    const clientId = process.env.CLIENT_ID
+    const clientSecret = process.env.CLIENT_SECRET
 
     console.log("[v0] Proxy: Tentando login na API RAG para usuário:", username)
     console.log("[v0] Proxy: URL:", `${apiUrl}/auth/login`)
+
+    const payload = new URLSearchParams()
+    payload.append("grant_type", "password")
+    payload.append("username", username)
+    payload.append("password", password)
+    payload.append("scope", "")
+    if (clientId) payload.append("client_id", clientId)
+    if (clientSecret) payload.append("client_secret", clientSecret)
 
     const response = await fetch(`${apiUrl}/auth/login`, {
       method: "POST",
@@ -20,7 +26,7 @@ export async function POST(request: NextRequest) {
         "Content-Type": "application/x-www-form-urlencoded",
         Accept: "application/json",
       },
-      body: params.toString(),
+      body: payload.toString(),
     })
 
     console.log("[v0] Proxy: Response status:", response.status)

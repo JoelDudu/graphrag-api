@@ -1,17 +1,26 @@
 "use client"
 
 import type React from "react"
+import type { RefObject } from "react"
 
 import { useState, useEffect } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { FileText, Trash2, Share2, Download, CheckCircle, Clock, Loader2, AlertCircle, Network } from "lucide-react"
-import { Badge } from "@/components/ui/badge"
+import {
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  AlertCircle
+} from "lucide-react"
 import { apiClient } from "@/lib/api-client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable"
+import DocumentsSidebar from "./documents-sidebar"
+import DocumentViewer from "./document-viewer"
+import ChatSidebar from "./chat-sidebar"
 import GraphViewer from "./graph-viewer"
 
-interface Document {
+export interface Document {
   document_id: string
   filename: string
   status: string
@@ -21,25 +30,63 @@ interface Document {
   model?: string
 }
 
-export default function DocumentsTab() {
+interface DocumentsTabProps {
+  fileInputRef?: RefObject<HTMLInputElement>
+}
+
+export default function DocumentsTab({ fileInputRef }: DocumentsTabProps) {
   const [documents, setDocuments] = useState<Document[]>([])
+  const [selectedDocument, setSelectedDocument] = useState<Document | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState("")
-  const [uploadProgress, setUploadProgress] = useState<{ [key: string]: number }>({})
-  const [processingDocs, setProcessingDocs] = useState<Set<string>>(new Set())
   const [graphViewerOpen, setGraphViewerOpen] = useState(false)
   const [selectedDocForGraph, setSelectedDocForGraph] = useState<Document | null>(null)
+
+  // Toggle states for panels
+  const [showLeftPanel, setShowLeftPanel] = useState(true)
+  const [showRightPanel, setShowRightPanel] = useState(true)
 
   useEffect(() => {
     loadDocuments()
   }, [])
 
+  // Polling for processing documents
+  useEffect(() => {
+    const processingDocsList = documents.filter(d => d.status === "Processing")
+    if (processingDocsList.length === 0) return
+
+    const interval = setInterval(() => {
+      loadDocuments()
+    }, 3000)
+
+    return () => clearInterval(interval)
+  }, [documents])
+
   const loadDocuments = async () => {
     setIsLoading(true)
     setError("")
     try {
-      const docs = await apiClient.listDocuments()
+      const response = await apiClient.listDocuments()
+
+      let docs: Document[] = []
+      if (Array.isArray(response)) {
+        docs = response
+      } else if (response && typeof response === 'object' && Array.isArray((response as any).documents)) {
+        docs = (response as any).documents
+      } else {
+        console.error("Formato de resposta inesperado:", response)
+        docs = []
+      }
+
       setDocuments(docs)
+
+      // Update selected document if it exists
+      if (selectedDocument) {
+        const updated = docs.find((d: Document) => d.document_id === selectedDocument.document_id)
+        if (updated) {
+          setSelectedDocument(updated)
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Erro ao carregar documentos"
       setError(message)
@@ -48,221 +95,175 @@ export default function DocumentsTab() {
     }
   }
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.currentTarget.files?.[0]
-    if (!file) return
+  const handleFileUpload = async (file: File) => {
+    // Validate file type
+    const validTypes = [
+      "application/pdf",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "text/plain",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/vnd.ms-excel",
+      "application/msword",
+      "application/vnd.ms-powerpoint",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "text/csv"
+    ]
 
+    if (!validTypes.includes(file.type) && !file.name.endsWith(".csv")) {
+      setError("Tipo de arquivo não suportado. Por favor envie PDF, DOCX, TXT, XLSX, PPTX ou CSV.")
+      return
+    }
+
+    setIsLoading(true)
     setError("")
-    const fileId = file.name
-    setUploadProgress({ ...uploadProgress, [fileId]: 0 })
 
     try {
-      const doc = await apiClient.uploadDocument(file)
-      setUploadProgress({ ...uploadProgress, [fileId]: 100 })
-
-      // Auto-process after upload
-      setProcessingDocs((prev) => new Set([...prev, doc.document_id]))
-      try {
-        await apiClient.processDocument(doc.document_id)
-      } catch {
-        console.error("Processamento iniciado em background")
-      }
-
-      setTimeout(() => loadDocuments(), 1000)
-      setTimeout(() => setUploadProgress({}), 2000)
+      // Only upload, don't process
+      await apiClient.uploadDocument(file)
+      // Reload documents to show the new one
+      await loadDocuments()
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Erro ao fazer upload"
+      const message = err instanceof Error ? err.message : "Erro ao fazer upload do documento"
       setError(message)
-      setUploadProgress({})
+    } finally {
+      setIsLoading(false)
     }
   }
 
   const handleDeleteDocument = async (documentId: string) => {
-    if (!confirm("Tem certeza que deseja deletar este documento?")) return
-
     try {
       await apiClient.deleteDocument(documentId)
       setDocuments(documents.filter((d) => d.document_id !== documentId))
+      if (selectedDocument?.document_id === documentId) {
+        setSelectedDocument(null)
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Erro ao deletar documento"
       setError(message)
+      throw err // Re-throw so the UI can stop loading
     }
   }
 
-  const handleProcessDocument = async (documentId: string) => {
+  const handleProcessDocument = async (documentId: string, model: string = "claude") => {
     try {
-      setProcessingDocs((prev) => new Set([...prev, documentId]))
-      await apiClient.processDocument(documentId, "claude", "generic")
+      await apiClient.processDocument(documentId, model, "generic")
       setTimeout(() => loadDocuments(), 1000)
     } catch (err) {
       const message = err instanceof Error ? err.message : "Erro ao processar documento"
       setError(message)
-    } finally {
-      setProcessingDocs((prev) => {
-        const newSet = new Set(prev)
-        newSet.delete(documentId)
-        return newSet
-      })
     }
   }
 
-  const getStatusBadge = (status: string, progress?: number) => {
-    switch (status) {
-      case "Pending":
-        return (
-          <Badge variant="outline" className="bg-yellow-50">
-            <Clock className="w-3 h-3 mr-1" />
-            Pendente
-          </Badge>
-        )
-      case "Processing":
-        return (
-          <Badge variant="outline" className="bg-blue-50">
-            <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-            Processando {progress ? `(${Math.round(progress)}%)` : ""}
-          </Badge>
-        )
-      case "Completed":
-        return (
-          <Badge variant="outline" className="bg-green-50">
-            <CheckCircle className="w-3 h-3 mr-1" />
-            Processado
-          </Badge>
-        )
-      case "Failed":
-        return (
-          <Badge variant="outline" className="bg-red-50">
-            <AlertCircle className="w-3 h-3 mr-1" />
-            Erro
-          </Badge>
-        )
-      default:
-        return <Badge variant="outline">{status}</Badge>
-    }
+  const handleSelectDocument = (doc: Document) => {
+    setSelectedDocument(doc)
   }
 
   return (
-    <div className="space-y-6">
+    <div className="h-full flex flex-col">
+      {/* Error Alert */}
       {error && (
-        <Alert variant="destructive">
+        <Alert variant="destructive" className="m-2 mb-0">
           <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription className="text-sm">{error}</AlertDescription>
         </Alert>
       )}
 
-      {/* Upload Section */}
-      <Card className="border-2 border-dashed border-border hover:border-primary/50 transition-colors">
-        <CardContent className="pt-6">
-          <div className="text-center">
-            <FileText className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
-            <h3 className="font-semibold text-foreground mb-2">Envie um documento</h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              Arraste aqui ou clique para enviar (PDF, DOCX, TXT, XLSX, etc)
-            </p>
-            <label htmlFor="file-upload">
-              <Button asChild>
-                <span>Escolher Arquivo</span>
-              </Button>
-              <input
-                id="file-upload"
-                type="file"
-                onChange={handleFileUpload}
-                className="hidden"
-                accept=".pdf,.docx,.txt,.xlsx,.xls,.doc"
-              />
-            </label>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Documents List */}
-      <Card>
-        <CardHeader>
-          <div className="flex justify-between items-start">
-            <div>
-              <CardTitle>Seus Documentos ({documents.length})</CardTitle>
-              <CardDescription>Gerencie e compartilhe seus arquivos processados</CardDescription>
-            </div>
-            <Button variant="outline" size="sm" onClick={loadDocuments} disabled={isLoading}>
-              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Atualizar"}
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {documents.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              Nenhum documento enviado ainda. Comece enviando um arquivo acima.
-            </div>
+      {/* Toggle Controls Header - Compact */}
+      <div className="flex items-center justify-between px-2 py-1 border-b border-border bg-muted/30 flex-shrink-0">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setShowLeftPanel(!showLeftPanel)}
+          className="h-7 px-2 gap-1"
+          title={showLeftPanel ? "Ocultar documentos" : "Mostrar documentos"}
+        >
+          {showLeftPanel ? (
+            <PanelLeftClose className="w-4 h-4" />
           ) : (
-            <div className="space-y-4">
-              {documents.map((doc) => (
-                <div
-                  key={doc.document_id}
-                  className="flex items-center justify-between p-4 border border-border rounded-lg hover:bg-muted/50 transition-colors"
-                >
-                  <div className="flex items-center gap-4 flex-1">
-                    <FileText className="w-8 h-8 text-primary flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <h4 className="font-medium text-foreground truncate">{doc.filename}</h4>
-                      <div className="flex gap-3 text-sm text-muted-foreground mt-1">
-                        <span>{doc.size || "—"}</span>
-                        <span>{new Date(doc.created_at).toLocaleDateString("pt-BR")}</span>
-                        {getStatusBadge(doc.status, doc.progress)}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    {doc.status === "Pending" && (
-                      <Button
-                        size="sm"
-                        variant="default"
-                        onClick={() => handleProcessDocument(doc.document_id)}
-                        disabled={processingDocs.has(doc.document_id)}
-                      >
-                        {processingDocs.has(doc.document_id) ? (
-                          <>
-                            <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                            Processando...
-                          </>
-                        ) : (
-                          "Processar"
-                        )}
-                      </Button>
-                    )}
-                    {doc.status === "Completed" && (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          title="Visualizar grafo"
-                          onClick={() => {
-                            setSelectedDocForGraph(doc)
-                            setGraphViewerOpen(true)
-                          }}
-                        >
-                          <Network className="w-4 h-4" />
-                        </Button>
-                        <Button size="sm" variant="outline">
-                          <Share2 className="w-4 h-4" />
-                        </Button>
-                      </>
-                    )}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-destructive hover:text-destructive bg-transparent"
-                      onClick={() => handleDeleteDocument(doc.document_id)}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <PanelLeftOpen className="w-4 h-4" />
           )}
-        </CardContent>
-      </Card>
+          <span className="text-xs hidden md:inline">Docs</span>
+        </Button>
 
+        {/* Spacer */}
+        <div className="flex-1" />
+
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setShowRightPanel(!showRightPanel)}
+          className="h-7 px-2 gap-1"
+          title={showRightPanel ? "Ocultar chat" : "Mostrar chat"}
+        >
+          <span className="text-xs hidden md:inline">Chat</span>
+          {showRightPanel ? (
+            <PanelRightClose className="w-4 h-4" />
+          ) : (
+            <PanelRightOpen className="w-4 h-4" />
+          )}
+        </Button>
+      </div>
+
+      {/* Main 3-Column Layout */}
+      <div className="flex-1 overflow-hidden min-h-0">
+        <ResizablePanelGroup direction="horizontal" className="h-full">
+          {/* Left Panel - Documents Sidebar */}
+          {showLeftPanel && (
+            <>
+              <ResizablePanel
+                defaultSize={22}
+                minSize={18}
+                maxSize={35}
+              >
+                <DocumentsSidebar
+                  documents={documents}
+                  selectedDocument={selectedDocument}
+                  onSelectDocument={handleSelectDocument}
+                  onRefresh={loadDocuments}
+                  onUpload={handleFileUpload}
+                  onDelete={handleDeleteDocument}
+                  onProcess={handleProcessDocument}
+                  isLoading={isLoading}
+                  fileInputRef={fileInputRef}
+                />
+              </ResizablePanel>
+              <ResizableHandle withHandle />
+            </>
+          )}
+
+          {/* Center Panel - Document Viewer */}
+          <ResizablePanel
+            defaultSize={showLeftPanel && showRightPanel ? 53 : showLeftPanel || showRightPanel ? 75 : 100}
+            minSize={30}
+          >
+            <DocumentViewer
+              document={selectedDocument}
+              onProcess={handleProcessDocument}
+              onDelete={handleDeleteDocument}
+              onViewGraph={(doc) => {
+                setSelectedDocForGraph(doc)
+                setGraphViewerOpen(true)
+              }}
+            />
+          </ResizablePanel>
+
+          {/* Right Panel - Chat Sidebar */}
+          {showRightPanel && (
+            <>
+              <ResizableHandle withHandle />
+              <ResizablePanel
+                defaultSize={25}
+                minSize={20}
+                maxSize={40}
+              >
+                <ChatSidebar selectedDocument={selectedDocument} />
+              </ResizablePanel>
+            </>
+          )}
+        </ResizablePanelGroup>
+      </div>
+
+      {/* Graph Viewer Dialog */}
       {selectedDocForGraph && (
         <GraphViewer
           documentId={selectedDocForGraph.document_id}
