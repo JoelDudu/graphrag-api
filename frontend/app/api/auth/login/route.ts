@@ -5,9 +5,9 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { username, password } = body
 
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
-    const clientId = process.env.CLIENT_ID
-    const clientSecret = process.env.CLIENT_SECRET
+    const apiUrl = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/+$/, "")
+const clientId = process.env.CLIENT_ID
+const clientSecret = process.env.CLIENT_SECRET
 
     console.log("[v0] Proxy: Tentando login na API RAG para usuário:", username)
     console.log("[v0] Proxy: URL:", `${apiUrl}/auth/login`)

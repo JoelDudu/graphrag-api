@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/+$/, "")
 
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const token = request.cookies.get("api_token")?.value
