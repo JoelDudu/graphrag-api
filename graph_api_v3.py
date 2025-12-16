@@ -50,6 +50,9 @@ app = FastAPI(
 UPLOAD_DIR = Path("./uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+from fastapi.staticfiles import StaticFiles
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
 
 # ============================================
 # Pydantic Models

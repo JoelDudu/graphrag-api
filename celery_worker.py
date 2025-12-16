@@ -121,6 +121,43 @@ def process_document_task(self, document_id: str, file_path: str, model: str = N
         print("📦 Etapa 1: Carregando documento e criando chunks...")
         update_progress(driver, document_id, 5)
         
+        # Verificar se arquivo existe localmente (Fallback para download HTTP se volumes não estiverem compartilhados)
+        if not os.path.exists(file_path):
+            print(f"⚠️ Arquivo não encontrado localmente: {file_path}")
+            print(f"🔄 Tentando baixar da API interna...")
+            
+            try:
+                import requests
+                filename = os.path.basename(file_path)
+                # Tenta adivinhar URL interna ou usa env var
+                api_url = os.getenv("API_INTERNAL_URL", "http://app-ragapi:8000")
+                download_url = f"{api_url}/uploads/{filename}"
+                
+                print(f"   ⬇️ Baixando de: {download_url}")
+                response = requests.get(download_url, stream=True, timeout=30)
+                
+                if response.status_code == 200:
+                    # Garantir diretório
+                    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                    with open(file_path, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    print(f"   ✅ Arquivo baixado com sucesso!")
+                else:
+                    print(f"   ❌ Falha ao baixar arquivo: Status {response.status_code}")
+                    # Se falhar, tenta localhost (caso worker e api estejam na mesma rede host - raro em docker, mas possível)
+                    if "app-ragapi" in api_url:
+                        fallback_url = f"http://localhost:8000/uploads/{filename}"
+                        print(f"   🔄 Tentando fallback localhost: {fallback_url}")
+                        response = requests.get(fallback_url, stream=True, timeout=10)
+                        if response.status_code == 200:
+                            with open(file_path, 'wb') as f:
+                                for chunk in response.iter_content(chunk_size=8192):
+                                    f.write(chunk)
+                            print(f"   ✅ Arquivo baixado via localhost!")
+            except Exception as e:
+                print(f"   ❌ Erro ao tentar baixar arquivo: {str(e)}")
+
         # Carregar documento (suporta múltiplos formatos)
         from file_processor import FileProcessor
         
