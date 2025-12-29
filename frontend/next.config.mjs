@@ -7,14 +7,7 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
-  async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: "https://app-ragapi.i85yk7.easypanel.host/:path*",
-      },
-    ]
-  },
 }
 
 export default nextConfig
+

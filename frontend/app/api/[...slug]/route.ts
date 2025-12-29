@@ -43,21 +43,28 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
 
     let body: any = null
+    let fetchOptions: RequestInit = {
+      method: "POST",
+      headers,
+    }
 
     // Verificar se é FormData (upload)
     const contentType = request.headers.get("content-type")
     if (contentType?.includes("multipart/form-data")) {
       body = await request.formData()
-    } else {
-      body = await request.json()
-      headers["Content-Type"] = "application/json"
+      fetchOptions.body = body
+    } else if (contentType?.includes("application/json")) {
+      try {
+        body = await request.json()
+        headers["Content-Type"] = "application/json"
+        fetchOptions.body = JSON.stringify(body)
+      } catch {
+        // Empty body - that's OK for some endpoints like /cancel
+        headers["Content-Type"] = "application/json"
+      }
     }
 
-    const response = await fetch(`${API_BASE_URL}${path}`, {
-      method: "POST",
-      headers,
-      body: contentType?.includes("multipart/form-data") ? body : JSON.stringify(body),
-    })
+    const response = await fetch(`${API_BASE_URL}${path}`, fetchOptions)
 
     const data = await response.json()
 

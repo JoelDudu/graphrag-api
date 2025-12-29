@@ -3,13 +3,15 @@
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { FileText, Download, Loader2, AlertCircle, Network, RefreshCw, Play, Trash2 } from "lucide-react"
+import { FileText, Download, Loader2, AlertCircle, Network, RefreshCw, Play, Trash2, ChevronLeft, ChevronRight, XCircle, Share2 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
+import { apiClient } from "@/lib/api-client"
+import ShareDialog from "@/components/dashboard/share-dialog"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,6 +32,14 @@ interface Document {
   created_at: string
   size?: string
   model?: string
+  error?: string
+  chunks?: number
+  entities?: number
+  relationships?: number
+  owner_id?: string
+  can_download?: boolean
+  can_delete?: boolean
+  can_share?: boolean
 }
 
 interface DocumentViewerProps {
@@ -44,33 +54,46 @@ const LLM_MODELS = [
   { value: "openai", label: "OpenAI GPT-4" },
   { value: "kimi", label: "Moonshot/Kimi" },
   { value: "deepseek", label: "DeepSeek" },
+  { value: "ollama", label: "Ollama (Local)" },
 ]
 
 export default function DocumentViewer({ document, onProcess, onViewGraph, onDelete }: DocumentViewerProps) {
   const [isProcessing, setIsProcessing] = useState(false)
   const [content, setContent] = useState<string>("")
+  const [summary, setSummary] = useState<string>("")
+  const [chunks, setChunks] = useState<Array<{ id: string; seq_id: number; text: string; preview: string }>>([])
+  const [activeChunk, setActiveChunk] = useState(0)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState("")
   const [isDeleting, setIsDeleting] = useState(false)
+  const [isCancelling, setIsCancelling] = useState(false)
+  const [isDownloading, setIsDownloading] = useState(false)
+  const [shareDialogOpen, setShareDialogOpen] = useState(false)
 
   // Process modal state
   const [processModalOpen, setProcessModalOpen] = useState(false)
   const [selectedModel, setSelectedModel] = useState("claude")
 
   useEffect(() => {
-    if (document?.document_id) {
+    if (document?.document_id && document.status === "Completed") {
       loadDocumentContent(document.document_id)
     } else {
       setContent("")
+      setSummary("")
+      setChunks([])
+      setActiveChunk(0)
     }
-  }, [document?.document_id])
+  }, [document?.document_id, document?.status])
 
   const loadDocumentContent = async (documentId: string) => {
     setIsLoading(true)
     setError("")
     try {
-      // TODO: Implementar endpoint para buscar conteúdo do documento
-      setContent("Visualização de conteúdo do documento será implementada em breve.")
+      const result = await apiClient.getDocumentChunks(documentId)
+      setContent(result.full_text || "")
+      setSummary(result.summary || "")
+      setChunks(result.chunks || [])
+      setActiveChunk(0)
     } catch (err) {
       const message = err instanceof Error ? err.message : "Erro ao carregar documento"
       setError(message)
@@ -88,6 +111,40 @@ export default function DocumentViewer({ document, onProcess, onViewGraph, onDel
       setProcessModalOpen(false)
     } finally {
       setIsProcessing(false)
+    }
+  }
+
+  const handleCancel = async () => {
+    if (!document) return
+    setIsCancelling(true)
+    try {
+      await apiClient.cancelProcessing(document.document_id)
+      window.location.reload() // Refresh to update status
+    } catch (err) {
+      console.error("Erro ao cancelar:", err)
+    } finally {
+      setIsCancelling(false)
+    }
+  }
+
+  const handleDownload = async () => {
+    if (!document) return
+    setIsDownloading(true)
+    try {
+      const blob = await apiClient.downloadDocument(document.document_id)
+      const url = window.URL.createObjectURL(blob)
+      const a = window.document.createElement('a')
+      a.href = url
+      a.download = document.filename
+      window.document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      a.remove()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Erro ao baixar"
+      setError(message)
+    } finally {
+      setIsDownloading(false)
     }
   }
 
@@ -166,22 +223,39 @@ export default function DocumentViewer({ document, onProcess, onViewGraph, onDel
 
           {/* Action Buttons */}
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Process Button */}
-            {(document.status === "Pending" || document.status === "Failed") && onProcess && (
+            {/* Process/Reprocess Button - show for Pending, Failed, or Completed */}
+            {(document.status === "Pending" || document.status === "Failed" || document.status === "Completed") && onProcess && (
               <Button
-                variant="default"
+                variant={document.status === "Completed" ? "outline" : "default"}
                 size="sm"
                 onClick={() => setProcessModalOpen(true)}
                 disabled={isProcessing}
               >
                 {isProcessing ? (
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                ) : document.status === "Failed" ? (
+                ) : document.status === "Completed" || document.status === "Failed" ? (
                   <RefreshCw className="w-4 h-4 mr-2" />
                 ) : (
                   <Play className="w-4 h-4 mr-2" />
                 )}
-                {document.status === "Failed" ? "Reprocessar" : "Processar"}
+                {document.status === "Pending" ? "Processar" : "Reprocessar"}
+              </Button>
+            )}
+
+            {/* Cancel Button - show when Processing */}
+            {document.status === "Processing" && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleCancel}
+                disabled={isCancelling}
+              >
+                {isCancelling ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <XCircle className="w-4 h-4 mr-2" />
+                )}
+                Cancelar
               </Button>
             )}
 
@@ -197,14 +271,37 @@ export default function DocumentViewer({ document, onProcess, onViewGraph, onDel
               </Button>
             )}
 
-            {/* Download Button */}
-            <Button variant="outline" size="sm">
-              <Download className="w-4 h-4 mr-2" />
-              Download
-            </Button>
+            {/* Download Button - only show if user has permission */}
+            {document.can_download !== false && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDownload}
+                disabled={isDownloading}
+              >
+                {isDownloading ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Download className="w-4 h-4 mr-2" />
+                )}
+                Download
+              </Button>
+            )}
 
-            {/* Delete Button with AlertDialog */}
-            {onDelete && (
+            {/* Share Button - only show if user has permission */}
+            {document.can_share && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShareDialogOpen(true)}
+              >
+                <Share2 className="w-4 h-4 mr-2" />
+                Compartilhar
+              </Button>
+            )}
+
+            {/* Delete Button with AlertDialog - only show if user has permission */}
+            {onDelete && document.can_delete !== false && (
               <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <Button
@@ -256,8 +353,8 @@ export default function DocumentViewer({ document, onProcess, onViewGraph, onDel
         </div>
 
         {/* Content */}
-        <ScrollArea className="flex-1">
-          <div className="p-6">
+        <ScrollArea className="flex-1 h-[calc(100vh-250px)]">
+          <div className="p-6 pb-20">
             {error && (
               <Alert variant="destructive" className="mb-4">
                 <AlertCircle className="h-4 w-4" />
@@ -270,17 +367,85 @@ export default function DocumentViewer({ document, onProcess, onViewGraph, onDel
                 <Loader2 className="w-8 h-8 animate-spin text-primary" />
               </div>
             ) : document.status === "Completed" ? (
-              <div className="prose prose-sm max-w-none">
+              <div className="space-y-4">
+                {/* Resumo do Documento */}
                 <Card>
-                  <CardHeader>
-                    <CardTitle>Conteúdo do Documento</CardTitle>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base">Resumo do Documento</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="text-sm text-muted-foreground whitespace-pre-wrap">
-                      {content || "Carregando conteúdo..."}
+                    <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
+                      {summary || (
+                        <span className="text-muted-foreground italic">
+                          Resumo não disponível. Reprocesse o documento para gerar um resumo automático.
+                        </span>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
+
+                {/* Chunks Slider */}
+                {chunks.length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <div className="flex items-center justify-between">
+                        <CardTitle className="text-base">Chunks do Documento</CardTitle>
+                        <span className="text-sm text-muted-foreground">
+                          {activeChunk + 1} de {chunks.length}
+                        </span>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      {/* Navigation */}
+                      <div className="flex items-center gap-2 mb-3">
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={() => setActiveChunk(prev => Math.max(0, prev - 1))}
+                          disabled={activeChunk === 0}
+                        >
+                          <ChevronLeft className="h-4 w-4" />
+                        </Button>
+
+                        {/* Chunk dots */}
+                        <div className="flex-1 flex justify-center gap-1 overflow-x-auto py-1">
+                          {chunks.slice(Math.max(0, activeChunk - 3), Math.min(chunks.length, activeChunk + 4)).map((_, idx) => {
+                            const realIndex = idx + Math.max(0, activeChunk - 3)
+                            return (
+                              <button
+                                key={realIndex}
+                                onClick={() => setActiveChunk(realIndex)}
+                                className={`w-2 h-2 rounded-full transition-all ${realIndex === activeChunk
+                                  ? "bg-primary w-4"
+                                  : "bg-muted-foreground/30 hover:bg-muted-foreground/50"
+                                  }`}
+                              />
+                            )
+                          })}
+                        </div>
+
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={() => setActiveChunk(prev => Math.min(chunks.length - 1, prev + 1))}
+                          disabled={activeChunk === chunks.length - 1}
+                        >
+                          <ChevronRight className="h-4 w-4" />
+                        </Button>
+                      </div>
+
+                      {/* Chunk Content */}
+                      <div className="bg-muted/50 rounded-lg p-4 min-h-[200px] max-h-[300px] overflow-y-auto">
+                        <div className="text-xs text-muted-foreground mb-2">
+                          Chunk #{chunks[activeChunk]?.seq_id ?? activeChunk}
+                        </div>
+                        <div className="text-sm whitespace-pre-wrap">
+                          {chunks[activeChunk]?.text || "Sem conteúdo"}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
 
                 {/* Document Statistics */}
                 <Card className="mt-4">
@@ -288,7 +453,7 @@ export default function DocumentViewer({ document, onProcess, onViewGraph, onDel
                     <CardTitle>Estatísticas</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
                       <div>
                         <p className="text-muted-foreground">Tamanho</p>
                         <p className="font-medium">{document.size || "—"}</p>
@@ -304,8 +469,20 @@ export default function DocumentViewer({ document, onProcess, onViewGraph, onDel
                         <p className="font-medium">{getStatusLabel(document.status)}</p>
                       </div>
                       <div>
-                        <p className="text-muted-foreground">Modelo</p>
-                        <p className="font-medium">{document.model || "—"}</p>
+                        <p className="text-muted-foreground">Modelo LLM</p>
+                        <p className="font-medium">{document.model?.toUpperCase() || "—"}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Chunks</p>
+                        <p className="font-medium text-blue-600">{document.chunks ?? "—"}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Entidades</p>
+                        <p className="font-medium text-green-600">{document.entities ?? "—"}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Relacionamentos</p>
+                        <p className="font-medium text-purple-600">{document.relationships ?? "—"}</p>
                       </div>
                     </div>
                   </CardContent>
@@ -319,8 +496,17 @@ export default function DocumentViewer({ document, onProcess, onViewGraph, onDel
                     "Este documento ainda não foi processado. Clique em 'Processar' para começar."}
                   {document.status === "Processing" &&
                     "Este documento está sendo processado. Aguarde a conclusão para visualizar o conteúdo."}
-                  {document.status === "Failed" &&
-                    "Houve um erro ao processar este documento. Tente reprocessá-lo."}
+                  {document.status === "Failed" && (
+                    <>
+                      Houve um erro ao processar este documento.
+                      {document.error && (
+                        <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+                          <strong>Detalhes:</strong> {document.error}
+                        </div>
+                      )}
+                      <div className="mt-2">Tente reprocessá-lo.</div>
+                    </>
+                  )}
                 </AlertDescription>
               </Alert>
             )}
@@ -379,6 +565,16 @@ export default function DocumentViewer({ document, onProcess, onViewGraph, onDel
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Share Dialog */}
+      {document && (
+        <ShareDialog
+          documentId={document.document_id}
+          documentName={document.filename}
+          open={shareDialogOpen}
+          onOpenChange={setShareDialogOpen}
+        />
+      )}
     </>
   )
 }

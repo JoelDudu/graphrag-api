@@ -18,6 +18,17 @@ export async function GET(request: NextRequest) {
       },
     })
 
+    // Check if response is JSON
+    const contentType = response.headers.get("content-type")
+    if (!contentType || !contentType.includes("application/json")) {
+      const text = await response.text()
+      console.error("[v0] Backend returned non-JSON response:", text)
+      return NextResponse.json(
+        { error: `Backend error: ${text.substring(0, 100)}` },
+        { status: response.status || 500 }
+      )
+    }
+
     const data = await response.json()
     return NextResponse.json(data, { status: response.status })
   } catch (error) {

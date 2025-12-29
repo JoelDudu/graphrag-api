@@ -119,6 +119,22 @@ Rules:
         
         print(f"📥 Processando resultados do batch {batch_id}...")
         
+        def strip_markdown_json(text: str) -> str:
+            """Remove markdown code blocks do JSON"""
+            text = text.strip()
+            # Remover ```json ... ``` ou ``` ... ```
+            if text.startswith("```"):
+                # Encontrar fim do primeiro bloco de código
+                lines = text.split("\n")
+                # Remover primeira linha (```json ou ```)
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                # Remover última linha (```)
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                text = "\n".join(lines)
+            return text.strip()
+        
         for i, result in enumerate(self.client.beta.messages.batches.results(batch_id)):
             try:
                 if result.result.type == "succeeded":
@@ -133,7 +149,9 @@ Rules:
                         print(f"   ⚠️ Chunk {result.custom_id}: resposta vazia")
                         graph_data = {"nodes": [], "relationships": []}
                     else:
-                        graph_data = json.loads(content)
+                        # Limpar markdown antes de parse
+                        clean_content = strip_markdown_json(content)
+                        graph_data = json.loads(clean_content)
                     
                     results.append({
                         "chunk_id": result.custom_id,
@@ -446,7 +464,7 @@ Rules:
         
         try:
             response = client.chat.completions.create(
-                model="kimi-k2-thinking-turbo",
+                model="kimi-latest",
                 messages=[
                     {"role": "system", "content": request["system_prompt"]},
                     {"role": "user", "content": request["user_message"]}
@@ -513,7 +531,7 @@ Rules:
 class LLMProvider:
     """Factory para criar LLMs baseado no modelo escolhido"""
     
-    SUPPORTED_MODELS = ["claude", "openai", "kimi", "deepseek"]
+    SUPPORTED_MODELS = ["claude", "openai", "kimi", "deepseek", "ollama"]
     
     @staticmethod
     def get_llm(model: str):
@@ -543,7 +561,7 @@ class LLMProvider:
                 raise ValueError("MOONSHOT_API_KEY não configurada")
             return ChatOpenAI(
                 api_key=api_key,
-                model="kimi-k2-thinking-turbo",
+                model="kimi-latest",
                 base_url="https://api.moonshot.ai/v1",
                 temperature=0.3,
                 timeout=300.0,
@@ -557,6 +575,19 @@ class LLMProvider:
                 model="deepseek-r1-0528-qwen3-8b",  # Ajuste conforme o modelo carregado no LM Studio
                 base_url=lm_studio_url,
                 temperature=0
+            )
+        elif model == "ollama":
+            # Ollama local (Qwen 2.5 ou outro modelo)
+            ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434/v1")
+            ollama_model = os.getenv("OLLAMA_MODEL", "qwen2.5")
+            print(f"   🦙 Usando Ollama: {ollama_model} em {ollama_url}")
+            return ChatOpenAI(
+                api_key="ollama",  # Ollama não requer API key
+                model=ollama_model,
+                base_url=ollama_url,
+                temperature=0.3,
+                timeout=30.0,  # 30 segundos de timeout
+                max_retries=1  # Apenas 1 retry
             )
         else:
             raise ValueError(f"Modelo '{model}' não suportado. Use: {LLMProvider.SUPPORTED_MODELS}")
@@ -592,8 +623,7 @@ IMPORTANT:
         return LLMGraphTransformer(
             llm=llm,
             node_properties=["description"],
-            relationship_properties=["description"],
-            system_prompt=system_prompt
+            relationship_properties=["description"]
         )
     
     @staticmethod
@@ -607,3 +637,93 @@ IMPORTANT:
         if model.lower() != "claude":
             raise ValueError("Batch processing só suportado para Claude")
         return ClaudeBatchProcessor()
+    
+    @staticmethod
+    def get_embedding_model(model: str = None):
+        """
+        Retorna o modelo de embeddings.
+        
+        Por padrão usa sentence-transformers (local, offline).
+        Se FORCE_OPENAI_EMBEDDINGS=true, usa OpenAI.
+        
+        Modelos locais recomendados:
+        - all-MiniLM-L6-v2: rápido, 384 dimensões
+        - all-mpnet-base-v2: melhor qualidade, 768 dimensões
+        - BAAI/bge-small-en-v1.5: ótimo equilíbrio, 384 dimensões
+        """
+        # Verificar se deve forçar OpenAI
+        force_openai = os.getenv("FORCE_OPENAI_EMBEDDINGS", "").lower() == "true"
+        
+        if force_openai:
+            from llama_index.embeddings.openai import OpenAIEmbedding
+            print("   📊 Usando OpenAI embeddings (FORCE_OPENAI_EMBEDDINGS=true)")
+            return OpenAIEmbedding(
+                model="text-embedding-3-small",
+                api_key=os.getenv("OPENAI_API_KEY")
+            )
+        
+        # Usar HuggingFace/sentence-transformers (local, offline)
+        try:
+            from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+            
+            # Modelo configurável via env var
+            embed_model_name = os.getenv(
+                "LOCAL_EMBEDDING_MODEL", 
+                "sentence-transformers/all-MiniLM-L6-v2"
+            )
+            
+            # Diretório de cache para modelos
+            cache_dir = os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+            
+            print(f"   📊 Usando embeddings locais: {embed_model_name}")
+            
+            # Tentar carregar em modo offline primeiro (usa cache)
+            try:
+                import os as os_env
+                os_env.environ["HF_HUB_OFFLINE"] = "1"  # Forçar modo offline
+                
+                return HuggingFaceEmbedding(
+                    model_name=embed_model_name,
+                    cache_folder=cache_dir,
+                    trust_remote_code=True
+                )
+            except Exception as offline_err:
+                print(f"   ⚠️ Modo offline falhou: {offline_err}")
+                print("   🔄 Tentando baixar modelo...")
+                
+                # Remover flag offline e tentar baixar
+                import os as os_env
+                os_env.environ.pop("HF_HUB_OFFLINE", None)
+                
+                try:
+                    return HuggingFaceEmbedding(
+                        model_name=embed_model_name,
+                        cache_folder=cache_dir,
+                        trust_remote_code=True
+                    )
+                except Exception as network_err:
+                    print(f"   ❌ Falha ao baixar modelo: {network_err}")
+                    
+                    # Fallback para modelo menor que pode estar em cache
+                    fallback_model = "sentence-transformers/all-MiniLM-L6-v2"
+                    print(f"   🔄 Tentando modelo fallback: {fallback_model}")
+                    
+                    try:
+                        return HuggingFaceEmbedding(
+                            model_name=fallback_model,
+                            cache_folder=cache_dir,
+                            trust_remote_code=True
+                        )
+                    except:
+                        raise network_err  # Re-raise se fallback também falhar
+                        
+        except ImportError:
+            # Fallback para OpenAI se HuggingFace não estiver instalado
+            print("   ⚠️ llama-index-embeddings-huggingface não instalado, usando OpenAI")
+            from llama_index.embeddings.openai import OpenAIEmbedding
+            return OpenAIEmbedding(
+                model="text-embedding-3-small",
+                api_key=os.getenv("OPENAI_API_KEY")
+            )
+
+

@@ -28,6 +28,10 @@ export interface Document {
   created_at: string
   size?: string
   model?: string
+  error?: string
+  chunks?: number
+  entities?: number
+  relationships?: number
 }
 
 interface DocumentsTabProps {
@@ -50,17 +54,45 @@ export default function DocumentsTab({ fileInputRef }: DocumentsTabProps) {
     loadDocuments()
   }, [])
 
-  // Polling for processing documents
+  // Polling for processing documents - use status endpoint
+  const processingDocs = documents.filter(d => d.status === "Processing")
+
   useEffect(() => {
-    const processingDocsList = documents.filter(d => d.status === "Processing")
-    if (processingDocsList.length === 0) return
+    if (processingDocs.length === 0) return
 
-    const interval = setInterval(() => {
-      loadDocuments()
-    }, 3000)
+    const checkStatuses = async () => {
+      try {
+        const statusPromises = processingDocs.map(doc =>
+          apiClient.getDocumentStatus(doc.document_id).catch(() => null)
+        )
+        const statuses = await Promise.all(statusPromises)
 
+        // Verificar se algum documento terminou de processar
+        const anyCompleted = statuses.some((s: any) =>
+          s && (s.status === "Completed" || s.status === "Failed")
+        )
+
+        // Se algum completou, recarrega a lista completa para pegar todas as infos
+        if (anyCompleted) {
+          loadDocuments()
+        } else {
+          // Apenas atualizar o progresso
+          setDocuments(prevDocs => prevDocs.map(doc => {
+            const newStatus = statuses.find((s: any) => s?.document_id === doc.document_id)
+            if (newStatus) {
+              return { ...doc, status: newStatus.status, progress: newStatus.progress, error: newStatus.error }
+            }
+            return doc
+          }))
+        }
+      } catch (err) {
+        console.error("Erro ao verificar status:", err)
+      }
+    }
+
+    const interval = setInterval(checkStatuses, 3000)
     return () => clearInterval(interval)
-  }, [documents])
+  }, [processingDocs.length])
 
   const loadDocuments = async () => {
     setIsLoading(true)

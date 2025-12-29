@@ -35,6 +35,19 @@ class CustomNeo4jVectorStore(VectorStore):
         self._create_index()
 
     def _create_index(self):
+        import os
+        recreate = os.getenv("RECREATE_VECTOR_INDEX", "").lower() == "true"
+        
+        # Se flag RECREATE_VECTOR_INDEX=true, dropar índice existente para recriar com nova dimensão
+        if recreate:
+            try:
+                drop_query = f"DROP INDEX {self.index_name} IF EXISTS"
+                with self.driver.session(database=self.database) as session:
+                    session.run(drop_query)
+                    print(f"   🔄 Índice vetorial '{self.index_name}' dropado para recriação")
+            except Exception as e:
+                print(f"   ⚠️ Erro ao dropar índice: {e}")
+        
         query = f"""
         CREATE VECTOR INDEX {self.index_name} IF NOT EXISTS
         FOR (n:{self.node_label})
@@ -46,6 +59,8 @@ class CustomNeo4jVectorStore(VectorStore):
         """
         with self.driver.session(database=self.database) as session:
             session.run(query)
+            if recreate:
+                print(f"   ✅ Índice vetorial recriado com {self.embedding_dimension} dimensões")
 
     def add(
         self,

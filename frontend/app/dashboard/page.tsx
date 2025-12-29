@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import DocumentsTab from "@/components/dashboard/documents-tab"
@@ -14,7 +14,6 @@ import {
   Settings,
   LogOut,
   Loader2,
-  Plus,
   ChevronLeft,
   ChevronRight
 } from "lucide-react"
@@ -35,7 +34,6 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true)
   const [username, setUsername] = useState<string>("")
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const router = useRouter()
   const { token, logout } = useAuth()
 
@@ -59,14 +57,6 @@ export default function Dashboard() {
     logout()
     localStorage.removeItem("username")
     router.push("/login")
-  }
-
-  const handleNewDocument = () => {
-    setActiveTab("documents")
-    // Trigger file input click after a short delay to ensure tab is active
-    setTimeout(() => {
-      fileInputRef.current?.click()
-    }, 100)
   }
 
   if (isLoading) {
@@ -106,35 +96,6 @@ export default function Dashboard() {
                 <h1 className="text-lg font-bold text-foreground">GraphRAG</h1>
                 <p className="text-xs text-muted-foreground">Dashboard</p>
               </div>
-            )}
-          </div>
-
-          {/* New Document Button */}
-          <div className={cn("p-3", sidebarCollapsed && "px-2")}>
-            {sidebarCollapsed ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    onClick={handleNewDocument}
-                    size="icon"
-                    className="w-full h-10"
-                  >
-                    <Plus className="w-5 h-5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="right">
-                  Novo Documento
-                </TooltipContent>
-              </Tooltip>
-            ) : (
-              <Button
-                onClick={handleNewDocument}
-                className="w-full justify-start"
-                size="sm"
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                Novo Documento
-              </Button>
             )}
           </div>
 
@@ -271,7 +232,7 @@ export default function Dashboard() {
         {/* Main Content */}
         <main className="flex-1 overflow-hidden">
           {activeTab === "documents" && (
-            <DocumentsTab fileInputRef={fileInputRef} />
+            <DocumentsTab />
           )}
           {activeTab === "search" && (
             <div className="h-full overflow-auto p-6">

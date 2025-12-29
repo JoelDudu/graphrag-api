@@ -4,9 +4,8 @@ import { useState, useRef, useEffect } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Send, Loader2, AlertCircle } from "lucide-react"
+import { Send, Loader2, AlertCircle, Database } from "lucide-react"
 import { apiClient } from "@/lib/api-client"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 
 interface Message {
@@ -14,12 +13,7 @@ interface Message {
   role: "user" | "assistant"
   content: string
   timestamp: Date
-}
-
-interface Document {
-  document_id: string
-  filename: string
-  status: string
+  sources?: Array<{ text: string; score?: number }>
 }
 
 export default function ChatTab() {
@@ -28,43 +22,25 @@ export default function ChatTab() {
       id: "1",
       role: "assistant",
       content:
-        "Olá! Sou seu assistente de IA. Posso ajudá-lo a buscar e entender seus documentos. Qual é sua pergunta?",
+        "Olá! Sou seu assistente de IA. Posso buscar informações em todos os seus documentos. Qual é sua pergunta?",
       timestamp: new Date(),
     },
   ])
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
-  const [selectedDoc, setSelectedDoc] = useState("")
-  const [documents, setDocuments] = useState<Document[]>([])
   const [error, setError] = useState("")
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    loadDocuments()
-  }, [])
-
-  useEffect(() => {
     scrollToBottom()
   }, [messages])
-
-  const loadDocuments = async () => {
-    try {
-      const docs = await apiClient.listDocuments()
-      setDocuments(docs.filter((d) => d.status === "processed"))
-      if (docs.length > 0) {
-        setSelectedDoc(docs[0].document_id)
-      }
-    } catch (err) {
-      console.error("Erro ao carregar documentos")
-    }
-  }
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }
 
   const handleSendMessage = async () => {
-    if (!input.trim() || !selectedDoc) return
+    if (!input.trim()) return
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -79,19 +55,16 @@ export default function ChatTab() {
     setError("")
 
     try {
-      const searchResults = await apiClient.query(input, selectedDoc, "hybrid", "claude", 5)
+      // Buscar em todo o banco usando busca híbrida
+      const response = await apiClient.query(input, "hybrid")
 
-      // Build context from search results
-      const context = searchResults.results?.map((r) => `${r.title}: ${r.excerpt}`).join("\n\n")
-
-      // Create assistant response based on search results
+      // Criar resposta do assistente
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: context
-          ? `Com base nos documentos: ${context}\n\nPara respostas mais detalhadas, considere fazer uma busca específica.`
-          : "Desculpe, não encontrei informações relevantes para sua pergunta. Tente refinar sua busca.",
+        content: response.answer || "Não encontrei informações relevantes para sua pergunta.",
         timestamp: new Date(),
+        sources: response.sources || [],
       }
       setMessages((prev) => [...prev, assistantMessage])
     } catch (err) {
@@ -103,7 +76,7 @@ export default function ChatTab() {
   }
 
   return (
-    <div className="space-y-4 h-[600px] flex flex-col">
+    <div className="space-y-4 h-[700px] flex flex-col">
       {error && (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
@@ -111,26 +84,16 @@ export default function ChatTab() {
         </Alert>
       )}
 
-      {/* Document Selection */}
-      {documents.length > 0 && (
-        <Select value={selectedDoc} onValueChange={setSelectedDoc}>
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {documents.map((doc) => (
-              <SelectItem key={doc.document_id} value={doc.document_id}>
-                {doc.filename}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
+      {/* Info Banner */}
+      <div className="flex items-center gap-2 px-4 py-2 bg-primary/10 rounded-lg text-sm">
+        <Database className="w-4 h-4 text-primary" />
+        <span>Buscando em <strong>todos os documentos</strong> do banco de dados</span>
+      </div>
 
       <Card className="flex-1 flex flex-col">
         <CardHeader>
-          <CardTitle>Chat com seus Documentos</CardTitle>
-          <CardDescription>Faça perguntas e obtenha respostas baseadas no conteúdo de seus documentos</CardDescription>
+          <CardTitle>Chat com Base de Conhecimento</CardTitle>
+          <CardDescription>Faça perguntas e obtenha respostas baseadas em todos os seus documentos</CardDescription>
         </CardHeader>
         <CardContent className="flex-1 flex flex-col overflow-hidden">
           {/* Messages Area */}
@@ -138,12 +101,26 @@ export default function ChatTab() {
             {messages.map((message) => (
               <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div
-                  className={`max-w-xs px-4 py-2 rounded-lg ${
-                    message.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground"
-                  }`}
+                  className={`max-w-[80%] px-4 py-3 rounded-lg ${message.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground"
+                    }`}
                 >
                   <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-                  <span className="text-xs opacity-70 mt-1 block">{message.timestamp.toLocaleTimeString()}</span>
+
+                  {/* Mostrar fontes se houver */}
+                  {message.sources && message.sources.length > 0 && (
+                    <div className="mt-3 pt-2 border-t border-border/50">
+                      <p className="text-xs font-medium mb-1 opacity-70">Fontes ({message.sources.length}):</p>
+                      <div className="space-y-1">
+                        {message.sources.slice(0, 3).map((source, idx) => (
+                          <p key={idx} className="text-xs opacity-60 truncate">
+                            • {source.text?.substring(0, 100)}...
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <span className="text-xs opacity-50 mt-2 block">{message.timestamp.toLocaleTimeString()}</span>
                 </div>
               </div>
             ))}
@@ -174,10 +151,10 @@ export default function ChatTab() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyPress={(e) => e.key === "Enter" && !isLoading && handleSendMessage()}
-              disabled={isLoading || !selectedDoc}
+              disabled={isLoading}
               className="flex-1"
             />
-            <Button onClick={handleSendMessage} disabled={isLoading || !input.trim() || !selectedDoc}>
+            <Button onClick={handleSendMessage} disabled={isLoading || !input.trim()}>
               {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             </Button>
           </div>

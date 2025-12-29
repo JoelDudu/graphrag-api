@@ -92,17 +92,14 @@ export default function ChatSidebar({ selectedDocument }: ChatSidebarProps) {
     setError("")
 
     try {
-      const searchResults = await apiClient.query(input, selectedDocument.document_id, "hybrid", "claude", 5)
+      // Chat usando o modelo do documento
+      const response = await apiClient.chat(input, selectedDocument.document_id)
 
-      // Build response from search results
-      const context = searchResults.results?.map((r: any) => `${r.title}: ${r.excerpt}`).join("\n\n")
-
+      // Usar response da API de chat
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: context
-          ? `${context}`
-          : "Não encontrei informações relevantes. Tente reformular.",
+        content: response.response || "Não encontrei informações relevantes. Tente reformular.",
         timestamp: new Date(),
       }
       setMessages((prev) => [...prev, assistantMessage])
@@ -165,8 +162,8 @@ export default function ChatSidebar({ selectedDocument }: ChatSidebarProps) {
             <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
               <div
                 className={`max-w-[90%] px-2 py-1.5 rounded-lg ${message.role === "user"
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-foreground border border-border"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-foreground border border-border"
                   }`}
               >
                 <p className="text-xs whitespace-pre-wrap break-words leading-relaxed">{message.content}</p>

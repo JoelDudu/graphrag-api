@@ -55,8 +55,7 @@ celery_app.conf.update(
     enable_utc=True,
 )
 
-# Configurar embeddings
-Settings.embed_model = OpenAIEmbedding(model="text-embedding-3-small")
+# Embeddings serão configurados dinamicamente baseado no modelo escolhido
 
 
 def get_neo4j_driver():
@@ -116,6 +115,24 @@ def process_document_task(self, document_id: str, file_path: str, model: str = N
         update_progress(driver, document_id, 0, "Processing")
         
         # ============================================
+        # VALIDAÇÃO: Testar conexão com LLM
+        # ============================================
+        print(f"🔍 Validando conexão com LLM ({model})...")
+        try:
+            llm = LLMProvider.get_llm(model)
+            from langchain_core.messages import HumanMessage
+            test_response = llm.invoke([HumanMessage(content="Responda apenas 'OK'")])
+            test_result = test_response.content if hasattr(test_response, 'content') else str(test_response)
+            if not test_result or len(test_result) < 1:
+                raise ValueError("LLM não retornou resposta válida")
+            print(f"   ✅ LLM respondendo: {test_result[:50]}...")
+        except Exception as llm_error:
+            error_msg = f"❌ Falha ao conectar com LLM ({model}): {str(llm_error)}"
+            print(error_msg)
+            update_progress(driver, document_id, 0, "Error", error=error_msg)
+            raise ValueError(error_msg)
+        
+        # ============================================
         # ETAPA 1: Carregar e criar chunks (0-20%)
         # ============================================
         print("📦 Etapa 1: Carregando documento e criando chunks...")
@@ -166,6 +183,40 @@ def process_document_task(self, document_id: str, file_path: str, model: str = N
         
         # Extrair texto do arquivo
         text_content = FileProcessor.extract_text(file_path)
+        
+        # ============================================
+        # LIMPEZA: Remover dados antigos (reprocessamento)
+        # ============================================
+        print("🧹 Limpando dados anteriores do documento...")
+        with driver.session(database=database) as session:
+            # Remover entidades e relacionamentos conectados ao documento
+            session.run("""
+                MATCH (d:Document {id: $document_id})<-[:PART_OF]-(c:Chunk)
+                OPTIONAL MATCH (c)-[r1]->(e)
+                OPTIONAL MATCH (e)-[r2]-()
+                DELETE r1, r2
+            """, document_id=document_id)
+            
+            # Remover entidades órfãs conectadas aos chunks
+            session.run("""
+                MATCH (d:Document {id: $document_id})<-[:PART_OF]-(c:Chunk)-[r]->(e)
+                DELETE r, e
+            """, document_id=document_id)
+            
+            # Remover chunks
+            session.run("""
+                MATCH (d:Document {id: $document_id})<-[:PART_OF]-(c:Chunk)
+                DETACH DELETE c
+            """, document_id=document_id)
+            
+            # Resetar contadores do documento (NÃO resetar batchId/batchStatus/total_chunks para reuso de 24h)
+            session.run("""
+                MATCH (d:Document {id: $document_id})
+                SET d.entityNodeCount = 0,
+                    d.entityEntityRelCount = 0,
+                    d.summary = null
+            """, document_id=document_id)
+        print("   ✅ Dados anteriores removidos")
         
         # Criar documento LangChain
         pages = [LCDocument(
@@ -260,32 +311,80 @@ def process_document_task(self, document_id: str, file_path: str, model: str = N
             
             processor = BatchProcessor()
             
-            # Verificar se já existe batch em andamento
+            # Verificar se já existe batch que pode ser reutilizado
             with driver.session(database=database) as session:
                 result = session.run("""
                     MATCH (d:Document {id: $document_id})
-                    RETURN d.batchId as batchId, d.batchStatus as batchStatus
+                    RETURN d.batchId as batchId, 
+                           d.batchStatus as batchStatus, 
+                           d.batchCompletedAt as batchCompletedAt,
+                           d.total_chunks as previousChunks
                 """, document_id=document_id)
                 record = result.single()
                 existing_batch_id = record["batchId"] if record and record["batchId"] else None
                 existing_batch_status = record["batchStatus"] if record and record["batchStatus"] else None
+                batch_completed_at = record["batchCompletedAt"] if record else None
+                previous_chunks = record["previousChunks"] if record else None
+            
+            # Verificar se batch pode ser reutilizado:
+            # 1. Batch existe
+            # 2. Foi completado há menos de 24 horas OU ainda está em processamento
+            # 3. Mesmo número de chunks (documento não mudou)
+            can_reuse_batch = False
+            if existing_batch_id:
+                if existing_batch_status in ['processing', 'in_progress', 'validating']:
+                    # Batch ainda em andamento
+                    can_reuse_batch = True
+                    print(f"   🔄 Batch anterior ainda em processamento: {existing_batch_id}")
+                elif existing_batch_status == 'completed' and batch_completed_at:
+                    # Verificar se foi há menos de 24h
+                    from datetime import datetime, timedelta, timezone
+                    try:
+                        # batch_completed_at vem como string do Neo4j
+                        if isinstance(batch_completed_at, str):
+                            completed_time = datetime.fromisoformat(batch_completed_at.replace('Z', '+00:00'))
+                        else:
+                            completed_time = batch_completed_at.to_native()
+                        
+                        hours_since = (datetime.now(timezone.utc) - completed_time).total_seconds() / 3600
+                        if hours_since < 24 and previous_chunks == total_chunks:
+                            can_reuse_batch = True
+                            print(f"   🔄 Batch completado há {hours_since:.1f}h (< 24h), reutilizando: {existing_batch_id}")
+                        elif hours_since >= 24:
+                            print(f"   ⏰ Batch expirado ({hours_since:.1f}h > 24h), criando novo...")
+                        elif previous_chunks != total_chunks:
+                            print(f"   📄 Documento mudou ({previous_chunks} → {total_chunks} chunks), criando novo batch...")
+                    except Exception as e:
+                        print(f"   ⚠️ Erro ao verificar data do batch: {e}")
             
             # Tentar recuperar batch existente
-            if existing_batch_id and existing_batch_status != 'completed':
-                print(f"   🔄 Tentando recuperar batch existente: {existing_batch_id}")
+            if can_reuse_batch and existing_batch_id:
+                print(f"   🔄 Recuperando batch: {existing_batch_id}")
                 try:
                     batch_results = processor.recover_batch(existing_batch_id, callback=batch_callback)
                     print(f"   ✅ Batch recuperado com sucesso!")
                 except Exception as e:
                     print(f"   ⚠️ Não foi possível recuperar batch: {str(e)[:100]}")
                     print(f"   🆕 Criando novo batch...")
-                    # Salvar novo batch_id antes de processar
-                    batch_results = processor.process_chunks_batch(chunks, callback=batch_callback, system_prompt=extraction_prompt, save_batch_id=lambda bid: session.run("""
-                        MATCH (d:Document {id: $document_id})
-                        SET d.batchId = $batch_id, d.batchStatus = 'processing'
-                    """, document_id=document_id, batch_id=bid))
-            else:
-                batch_results = processor.process_chunks_batch(chunks, callback=batch_callback, system_prompt=extraction_prompt)
+                    can_reuse_batch = False
+            
+            # Criar novo batch se necessário
+            if not can_reuse_batch or not existing_batch_id:
+                def save_batch_id(bid):
+                    with driver.session(database=database) as s:
+                        s.run("""
+                            MATCH (d:Document {id: $document_id})
+                            SET d.batchId = $batch_id, 
+                                d.batchStatus = 'processing',
+                                d.batchStartedAt = datetime()
+                        """, document_id=document_id, batch_id=bid)
+                
+                batch_results = processor.process_chunks_batch(
+                    chunks, 
+                    callback=batch_callback, 
+                    system_prompt=extraction_prompt,
+                    save_batch_id=save_batch_id
+                )
             
             # Processar resultados do batch
             for result in batch_results:
@@ -360,6 +459,39 @@ def process_document_task(self, document_id: str, file_path: str, model: str = N
         print(f"   ✅ {len(graph_documents)} graph documents gerados")
         if failed_chunks:
             print(f"   ⚠️ {len(failed_chunks)} chunks falharam (continuando...)")
+        
+        # Contar quantas entidades foram realmente extraídas
+        total_nodes_extracted = 0
+        for graph_doc in graph_documents:
+            if isinstance(graph_doc, dict):
+                total_nodes_extracted += len(graph_doc.get('nodes', []))
+            else:
+                total_nodes_extracted += len(graph_doc.nodes) if hasattr(graph_doc, 'nodes') else 0
+        
+        print(f"   📊 Total de entidades extraídas: {total_nodes_extracted}")
+        
+        # Verificar se TODOS os chunks falharam OU se nenhuma entidade foi extraída
+        if len(failed_chunks) == total_chunks or len(graph_documents) == 0 or total_nodes_extracted == 0:
+            error_msg = f"Extração de entidades falhou. "
+            if total_nodes_extracted == 0 and len(graph_documents) > 0:
+                error_msg += f"Foram processados {len(graph_documents)} chunks mas nenhuma entidade foi extraída."
+            else:
+                error_msg += f"Todos os {total_chunks} chunks falharam."
+            if failed_chunks:
+                # Pegar o primeiro erro como exemplo
+                first_error = failed_chunks[0][1] if len(failed_chunks[0]) > 1 else "Erro desconhecido"
+                error_msg += f" Erro: {first_error[:200]}"
+            print(f"   ❌ {error_msg}")
+            update_progress(driver, document_id, 0, "Failed", error_msg)
+            driver.close()
+            return {
+                "document_id": document_id,
+                "status": "Failed",
+                "error": error_msg,
+                "chunks": len(chunks),
+                "entities": 0,
+                "relationships": 0
+            }
         
         # ============================================
         # ETAPA 3: Salvar no Neo4j (80-95%)
@@ -511,16 +643,26 @@ def process_document_task(self, document_id: str, file_path: str, model: str = N
         # ============================================
         print("🔧 Etapa 4: Gerando embeddings...")
         
+        # Usar embedding model (local por padrão, OpenAI se FORCE_OPENAI_EMBEDDINGS=true)
+        from llama_index.core.schema import TextNode
+        embed_model = LLMProvider.get_embedding_model(model)
+        
+        # Determinar dimensão do embedding baseado no modelo
+        # OpenAI: 1536, all-MiniLM-L6-v2: 384, all-mpnet-base-v2: 768
+        force_openai = os.getenv("FORCE_OPENAI_EMBEDDINGS", "").lower() == "true"
+        if force_openai:
+            embedding_dimension = 1536
+        else:
+            # Modelos locais - dimensão configurável
+            embedding_dimension = int(os.getenv("LOCAL_EMBEDDING_DIMENSION", "384"))
+        
         vector_store = CustomNeo4jVectorStore(
             username=os.getenv("NEO4J_USER"),
             password=os.getenv("NEO4J_PASSWORD"),
             url=os.getenv("NEO4J_URI"),
-            embedding_dimension=1536,
+            embedding_dimension=embedding_dimension,
             database=database
         )
-        
-        from llama_index.core.schema import TextNode
-        embed_model = Settings.embed_model
         
         llama_nodes = []
         for chunk in chunks:
@@ -528,9 +670,59 @@ def process_document_task(self, document_id: str, file_path: str, model: str = N
             node.embedding = embed_model.get_text_embedding(node.get_content())
             llama_nodes.append(node)
         
+        # Log da dimensão real do embedding gerado
+        if llama_nodes and llama_nodes[0].embedding:
+            actual_dim = len(llama_nodes[0].embedding)
+            print(f"   📊 Dimensão do embedding: {actual_dim} (esperado: {embedding_dimension})")
+            if actual_dim != embedding_dimension:
+                print(f"   ⚠️ ATENÇÃO: Dimensão não confere! Verifique LOCAL_EMBEDDING_DIMENSION no .env")
+        
         vector_store.add(llama_nodes)
         
         print("   ✅ Embeddings salvos")
+        
+        # ============================================
+        # ETAPA 5: Gerar Resumo (97-99%)
+        # ============================================
+        print("📝 Etapa 5: Gerando resumo do documento...")
+        update_progress(driver, document_id, 97)
+        
+        try:
+            # Juntar primeiros chunks para contexto (limite de tokens)
+            context_text = "\n\n".join([c.page_content for c in chunks[:5]])[:8000]
+            
+            # Obter LLM para gerar resumo
+            llm = LLMProvider.get_llm(model)
+            
+            summary_prompt = f"""Analise o seguinte conteúdo de documento e gere um resumo executivo conciso.
+
+O resumo deve:
+1. Ter no máximo 3 parágrafos
+2. Destacar os pontos principais
+3. Ser contextual e informativo
+4. Estar em português
+
+CONTEÚDO:
+{context_text}
+
+RESUMO:"""
+            
+            # Usar invoke() para LangChain chat models
+            from langchain_core.messages import HumanMessage
+            summary_response = llm.invoke([HumanMessage(content=summary_prompt)])
+            document_summary = summary_response.content.strip()
+            
+            # Salvar resumo no documento
+            with driver.session(database=database) as session:
+                session.run("""
+                    MATCH (d:Document {id: $document_id})
+                    SET d.summary = $summary
+                """, document_id=document_id, summary=document_summary)
+            
+            print(f"   ✅ Resumo gerado ({len(document_summary)} caracteres)")
+        except Exception as e:
+            print(f"   ⚠️ Erro ao gerar resumo: {str(e)}")
+            document_summary = ""
         
         # ============================================
         # Finalização

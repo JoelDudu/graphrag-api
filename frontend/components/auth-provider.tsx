@@ -10,12 +10,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    const storedToken = localStorage.getItem("api_token")
-    if (storedToken) {
-      setToken(storedToken)
-      apiClient.setToken(storedToken)
+    // Timeout fallback to ensure loading state is resolved even if localStorage fails
+    const timeout = setTimeout(() => {
+      setIsLoading(false)
+    }, 1000)
+
+    try {
+      const storedToken = localStorage.getItem("api_token")
+      if (storedToken) {
+        setToken(storedToken)
+        apiClient.setToken(storedToken)
+      }
+    } catch (err) {
+      console.error("Failed to access localStorage:", err)
+    } finally {
+      clearTimeout(timeout)
+      setIsLoading(false)
     }
-    setIsLoading(false)
   }, [])
 
   const login = async (username: string, password: string) => {

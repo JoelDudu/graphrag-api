@@ -11,55 +11,38 @@ import { apiClient } from "@/lib/api-client"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 
-interface SearchResult {
-  id: string
-  title: string
-  excerpt: string
-  source: string
-  relevance: number
-}
-
-interface Document {
-  document_id: string
-  filename: string
-  status: string
+interface Source {
+  text: string
+  score?: number
+  metadata?: Record<string, any>
+  entity?: string
+  type?: string
+  description?: string
 }
 
 export default function SearchTab() {
   const [searchQuery, setSearchQuery] = useState("")
   const [searchType, setSearchType] = useState<"semantic" | "graph" | "hybrid">("semantic")
-  const [selectedDoc, setSelectedDoc] = useState("")
-  const [documents, setDocuments] = useState<Document[]>([])
-  const [results, setResults] = useState<SearchResult[]>([])
+  const [answer, setAnswer] = useState("")
+  const [sources, setSources] = useState<Source[]>([])
+  const [modelUsed, setModelUsed] = useState("")
   const [isSearching, setIsSearching] = useState(false)
   const [error, setError] = useState("")
 
-  useEffect(() => {
-    loadDocuments()
-  }, [])
-
-  const loadDocuments = async () => {
-    try {
-      const docs = await apiClient.listDocuments()
-      setDocuments(docs.filter((d) => d.status === "processed"))
-      if (docs.length > 0) {
-        setSelectedDoc(docs[0].document_id)
-      }
-    } catch (err) {
-      console.error("Erro ao carregar documentos")
-    }
-  }
 
   const handleSearch = async () => {
-    if (!searchQuery.trim() || !selectedDoc) return
+    if (!searchQuery.trim()) return
 
     setIsSearching(true)
     setError("")
-    setResults([])
+    setAnswer("")
+    setSources([])
 
     try {
-      const response = await apiClient.query(searchQuery, selectedDoc, searchType)
-      setResults(response.results || [])
+      const response = await apiClient.query(searchQuery, searchType)
+      setAnswer(response.answer || "")
+      setSources(response.sources || [])
+      setModelUsed(response.model_used || "")
     } catch (err) {
       const message = err instanceof Error ? err.message : "Erro ao buscar"
       setError(message)
@@ -75,29 +58,6 @@ export default function SearchTab() {
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>{error}</AlertDescription>
         </Alert>
-      )}
-
-      {/* Document Selection */}
-      {documents.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Selecione um Documento</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Select value={selectedDoc} onValueChange={setSelectedDoc}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {documents.map((doc) => (
-                  <SelectItem key={doc.document_id} value={doc.document_id}>
-                    {doc.filename}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </CardContent>
-        </Card>
       )}
 
       {/* Search Options */}
@@ -159,7 +119,7 @@ export default function SearchTab() {
               disabled={isSearching}
               className="flex-1"
             />
-            <Button onClick={handleSearch} disabled={isSearching || !selectedDoc}>
+            <Button onClick={handleSearch} disabled={isSearching || !searchQuery.trim()}>
               {isSearching ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -177,32 +137,54 @@ export default function SearchTab() {
       </Card>
 
       {/* Results */}
-      {results.length > 0 && (
+      {(answer || sources.length > 0) && (
         <Card>
           <CardHeader>
-            <CardTitle>Resultados ({results.length})</CardTitle>
-            <CardDescription>Resultados da busca {searchType}</CardDescription>
+            <CardTitle>Resultado da Busca</CardTitle>
+            <CardDescription>
+              Busca {searchType} • Modelo: {modelUsed}
+            </CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {results.map((result) => (
-                <div
-                  key={result.id}
-                  className="p-4 border border-border rounded-lg hover:bg-muted/50 transition-colors"
-                >
-                  <div className="flex justify-between items-start mb-2">
-                    <h4 className="font-medium text-foreground">{result.title}</h4>
-                    <div className="text-right">
-                      <p className="text-sm font-medium text-primary">
-                        {Math.round(result.relevance * 100)}% relevância
+          <CardContent className="space-y-4">
+            {/* Resposta */}
+            {answer && (
+              <div className="p-4 bg-primary/5 rounded-lg border border-primary/20">
+                <h4 className="font-medium text-foreground mb-2">Resposta</h4>
+                <p className="text-sm text-muted-foreground whitespace-pre-wrap">{answer}</p>
+              </div>
+            )}
+
+            {/* Fontes */}
+            {sources.length > 0 && (
+              <div>
+                <h4 className="font-medium text-foreground mb-3">Fontes ({sources.length})</h4>
+                <div className="space-y-3">
+                  {sources.map((source, idx) => (
+                    <div
+                      key={idx}
+                      className="p-3 border border-border rounded-lg hover:bg-muted/50 transition-colors"
+                    >
+                      {source.entity && (
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="font-medium text-primary">{source.entity}</span>
+                          {source.type && (
+                            <span className="text-xs px-2 py-0.5 bg-muted rounded">{source.type}</span>
+                          )}
+                        </div>
+                      )}
+                      <p className="text-sm text-muted-foreground">
+                        {source.text || source.description || JSON.stringify(source)}
                       </p>
+                      {source.score && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Relevância: {Math.round(source.score * 100)}%
+                        </p>
+                      )}
                     </div>
-                  </div>
-                  <p className="text-sm text-muted-foreground mb-3">{result.excerpt}</p>
-                  <p className="text-xs text-muted-foreground">Fonte: {result.source}</p>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

@@ -8,10 +8,12 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { AlertCircle, Loader2, Copy, Check } from "lucide-react"
+import { AlertCircle, Loader2, Copy, Check, Users, Users2 } from "lucide-react"
 import { apiClient } from "@/lib/api-client"
 import { useAuth } from "@/lib/auth-context"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import UserManagement from "@/components/admin/user-management"
+import GroupManagement from "@/components/admin/group-management"
 
 interface SharedUser {
   email: string
@@ -37,11 +39,26 @@ export default function SettingsTab() {
   const [error, setError] = useState("")
   const [successMessage, setSuccessMessage] = useState("")
   const [copiedEmail, setCopiedEmail] = useState("")
+  const [isAdmin, setIsAdmin] = useState(false)
   const { logout } = useAuth()
 
   useEffect(() => {
     loadDocuments()
+    checkAdmin()
   }, [])
+
+  const checkAdmin = async () => {
+    try {
+      const me = await apiClient.getMe()
+      // Check if it's redirecting (401 response)
+      if (me && !me._redirecting) {
+        setIsAdmin(me.is_admin || false)
+      }
+    } catch (err) {
+      // Silently fail - user just won't see admin tabs
+      // This is expected when API is not reachable
+    }
+  }
 
   useEffect(() => {
     if (selectedDocForShare) {
@@ -51,20 +68,29 @@ export default function SettingsTab() {
 
   const loadDocuments = async () => {
     try {
-      const docs = await apiClient.listDocuments()
+      const response = await apiClient.listDocuments()
+      // Handle both array response and object with documents property
+      const docs = Array.isArray(response) ? response : (response?.documents || [])
       setDocuments(docs)
       if (docs.length > 0) {
         setSelectedDocForShare(docs[0].document_id)
       }
     } catch (err) {
-      console.error("Erro ao carregar documentos")
+      console.error("Erro ao carregar documentos", err)
     }
   }
 
   const loadSharedUsers = async () => {
     try {
-      const sharedUsers = await apiClient.getSharedUsers(selectedDocForShare)
-      setShared(sharedUsers)
+      const result = await apiClient.getDocumentPermissions(selectedDocForShare)
+      // Converter para formato antigo para manter compatibilidade visual
+      const shares = (result.shares || []).filter((s: any) => s.entity_type === 'user')
+      setShared(shares.map((s: any) => ({
+        email: s.entity_name,
+        role: s.permission === 'manage' ? 'admin' : 'viewer',
+        added_date: new Date().toISOString(),
+        entity_id: s.entity_id
+      })))
     } catch (err) {
       console.error("Erro ao carregar usuários compartilhados")
     }
@@ -78,7 +104,9 @@ export default function SettingsTab() {
     setSuccessMessage("")
 
     try {
-      await apiClient.shareDocument(selectedDocForShare, newEmail, newRole)
+      // Buscar user_id pelo username (simplificado - adiciona como username)
+      const permission = newRole === 'admin' ? 'manage' : 'read'
+      await apiClient.shareDocument(selectedDocForShare, 'user', newEmail, permission as 'read' | 'manage')
       await loadSharedUsers()
       setNewEmail("")
       setNewRole("viewer")
@@ -92,14 +120,14 @@ export default function SettingsTab() {
     }
   }
 
-  const handleRemoveSharedUser = async (userEmail: string) => {
+  const handleRemoveSharedUser = async (userEmail: string, entityId?: string) => {
     if (!selectedDocForShare) return
 
     setError("")
     setSuccessMessage("")
 
     try {
-      await apiClient.removeSharedUser(selectedDocForShare, userEmail)
+      await apiClient.unshareDocument(selectedDocForShare, 'user', entityId || userEmail)
       await loadSharedUsers()
       setSuccessMessage(`${userEmail} removido com sucesso!`)
       setTimeout(() => setSuccessMessage(""), 3000)
@@ -109,14 +137,17 @@ export default function SettingsTab() {
     }
   }
 
-  const handleUpdateRole = async (userEmail: string, newRole: "viewer" | "editor" | "admin") => {
+  const handleUpdateRole = async (userEmail: string, newRole: "viewer" | "editor" | "admin", entityId?: string) => {
     if (!selectedDocForShare) return
 
     setError("")
     setSuccessMessage("")
 
     try {
-      await apiClient.updateUserRole(selectedDocForShare, userEmail, newRole)
+      // Para atualizar, primeiro remove e depois adiciona com nova permissão
+      const permission = newRole === 'admin' ? 'manage' : 'read'
+      await apiClient.unshareDocument(selectedDocForShare, 'user', entityId || userEmail)
+      await apiClient.shareDocument(selectedDocForShare, 'user', entityId || userEmail, permission as 'read' | 'manage')
       await loadSharedUsers()
       setSuccessMessage(`Permissão atualizada para ${newRole}!`)
       setTimeout(() => setSuccessMessage(""), 3000)
@@ -147,10 +178,20 @@ export default function SettingsTab() {
 
   return (
     <Tabs defaultValue="account" className="w-full space-y-6">
-      <TabsList>
+      <TabsList className="flex-wrap h-auto">
         <TabsTrigger value="account">Conta</TabsTrigger>
         <TabsTrigger value="sharing">Compartilhamento</TabsTrigger>
         <TabsTrigger value="notifications">Notificações</TabsTrigger>
+        {isAdmin && (
+          <>
+            <TabsTrigger value="users">
+              <Users className="w-4 h-4 mr-1" /> Usuários
+            </TabsTrigger>
+            <TabsTrigger value="groups">
+              <Users2 className="w-4 h-4 mr-1" /> Grupos
+            </TabsTrigger>
+          </>
+        )}
       </TabsList>
 
       {/* Account Tab */}
@@ -201,7 +242,7 @@ export default function SettingsTab() {
           </Alert>
         )}
 
-        {documents.length > 0 && (
+        {documents.length > 0 ? (
           <Card>
             <CardHeader>
               <CardTitle>Selecione um Documento</CardTitle>
@@ -220,6 +261,15 @@ export default function SettingsTab() {
                   ))}
                 </SelectContent>
               </Select>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardContent className="py-8">
+              <div className="text-center text-muted-foreground">
+                <p className="text-lg font-medium mb-2">Nenhum documento encontrado</p>
+                <p className="text-sm">Faça upload de documentos na aba "Documentos" para poder compartilhá-los aqui.</p>
+              </div>
             </CardContent>
           </Card>
         )}
@@ -376,6 +426,36 @@ export default function SettingsTab() {
           </CardContent>
         </Card>
       </TabsContent>
+
+      {/* Users Tab (Admin only) */}
+      {isAdmin && (
+        <TabsContent value="users">
+          <Card>
+            <CardHeader>
+              <CardTitle>Gerenciamento de Usuários</CardTitle>
+              <CardDescription>Criar, editar e remover usuários do sistema</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <UserManagement />
+            </CardContent>
+          </Card>
+        </TabsContent>
+      )}
+
+      {/* Groups Tab (Admin only) */}
+      {isAdmin && (
+        <TabsContent value="groups">
+          <Card>
+            <CardHeader>
+              <CardTitle>Gerenciamento de Grupos</CardTitle>
+              <CardDescription>Organizar usuários em grupos para facilitar compartilhamento</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <GroupManagement />
+            </CardContent>
+          </Card>
+        </TabsContent>
+      )}
     </Tabs>
   )
 }
